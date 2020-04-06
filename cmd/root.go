@@ -89,11 +89,6 @@ func (o *Options) Validate(args []string) error {
 func (o *Options) Run() error {
 	var r *certificate.Resource
 
-	c, err := certron.NewClient(o.Email)
-	if err != nil {
-		return err
-	}
-
 	fn := path.Join(o.ProjectDir, domainFileNameFmt(o.Domain))
 
 	if !o.Force {
@@ -101,6 +96,11 @@ func (o *Options) Run() error {
 	}
 
 	if r == nil {
+		c, err := certron.NewClient(o.Email)
+		if err != nil {
+			return err
+		}
+
 		r, err = c.GenerateCert(o.Domain, o.AcceptedTerms)
 		if err != nil {
 			return err
