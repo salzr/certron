@@ -1,10 +1,16 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/ioutil"
+	"os"
+	"path"
 	"regexp"
+	"strings"
 
+	"github.com/go-acme/lego/v3/certificate"
 	"github.com/spf13/cobra"
 
 	"salzr.com/certron/pkg/certron"
@@ -18,6 +24,8 @@ const (
 type Options struct {
 	Email         string
 	Domain        string
+	ProjectDir    string
+	Force         bool
 	AcceptedTerms bool
 }
 
@@ -67,18 +75,81 @@ func (o *Options) Validate(args []string) error {
 		return errors.New("you must accept the terms of service in order to use certron")
 	}
 
+	if _, err := os.Stat(o.ProjectDir); err != nil {
+		if os.IsNotExist(err) {
+			if err := os.MkdirAll(o.ProjectDir, 0700); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }
 
 func (o *Options) Run() error {
+	var r *certificate.Resource
+
 	c, err := certron.NewClient(o.Email)
 	if err != nil {
 		return err
 	}
 
-	return c.GenerateCert(o.Domain, o.AcceptedTerms)
+	fn := path.Join(o.ProjectDir, domainFileNameFmt(o.Domain))
+
+	if !o.Force {
+		r = isCached(fn)
+	}
+
+	if r == nil {
+		r, err = c.GenerateCert(o.Domain, o.AcceptedTerms)
+		if err != nil {
+			return err
+		}
+
+		if err := cache(fn, r); err != nil {
+			return err
+		}
+	}
+
+	fmt.Printf("%s%s\n", r.Certificate, r.IssuerCertificate)
+
+	return nil
+}
+
+func cache(filename string, r *certificate.Resource) error {
+	j, err := json.Marshal(certron.NewResourceCache(r))
+	if err != nil {
+		return err
+	}
+
+	return ioutil.WriteFile(filename, j, 0600)
+}
+
+func isCached(filename string) *certificate.Resource {
+	_, err := os.Stat(filename)
+	if err != nil {
+		return nil
+	}
+
+	j, err := ioutil.ReadFile(filename)
+	if err != nil {
+		return nil
+	}
+
+	r := &certron.ResourceCache{}
+	if err := json.Unmarshal(j, r); err != nil {
+		return nil
+	}
+
+	return r.ToResource()
 }
 
 func newOptions() *Options {
-	return &Options{}
+	return &Options{
+		ProjectDir: defaultProjectDir(),
+	}
+}
+
+func domainFileNameFmt(d string) string {
+	return strings.ReplaceAll(d, ".", "_") + ".json"
 }

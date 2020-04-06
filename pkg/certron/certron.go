@@ -5,7 +5,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"fmt"
 
 	"github.com/go-acme/lego/v3/certcrypto"
 	"github.com/go-acme/lego/v3/certificate"
@@ -23,6 +22,16 @@ type User struct {
 type Client struct {
 	user   *User
 	client *lego.Client
+}
+
+type ResourceCache struct {
+	Domain            string `json:"domain"`
+	CertURL           string `json:"certUrl"`
+	CertStableURL     string `json:"certStableUrl"`
+	PrivateKey        []byte `json:"privateKey"`
+	Certificate       []byte `json:"certificate"`
+	IssuerCertificate []byte `json:"issuerCertificate"`
+	CSR               []byte `json:"csr"`
 }
 
 func (u *User) GetEmail() string {
@@ -59,19 +68,19 @@ func NewClient(email string) (*Client, error) {
 	return &Client{client: c, user: u}, nil
 }
 
-func (c *Client) GenerateCert(domain string, confirm bool) error {
+func (c *Client) GenerateCert(domain string, confirm bool) (*certificate.Resource, error) {
 	p, err := dns.NewDNSChallengeProviderByName("route53")
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if err := c.client.Challenge.SetDNS01Provider(p); err != nil {
-		return err
+		return nil, err
 	}
 
 	r, err := c.client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: confirm})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	c.user.Registration = r
 
@@ -79,12 +88,30 @@ func (c *Client) GenerateCert(domain string, confirm bool) error {
 		Domains: []string{domain},
 		Bundle:  true,
 	}
-	certs, err := c.client.Certificate.Obtain(req)
-	if err != nil {
-		return err
+
+	return c.client.Certificate.Obtain(req)
+}
+
+func (r ResourceCache) ToResource() *certificate.Resource {
+	return &certificate.Resource{
+		Domain:            r.Domain,
+		CertURL:           r.CertURL,
+		CertStableURL:     r.CertStableURL,
+		PrivateKey:        r.PrivateKey,
+		Certificate:       r.Certificate,
+		IssuerCertificate: r.IssuerCertificate,
+		CSR:               r.CSR,
 	}
+}
 
-	fmt.Printf("%#v\n", certs)
-
-	return nil
+func NewResourceCache(r *certificate.Resource) *ResourceCache {
+	return &ResourceCache{
+		Domain:            r.Domain,
+		CertURL:           r.CertURL,
+		CertStableURL:     r.CertStableURL,
+		PrivateKey:        r.PrivateKey,
+		Certificate:       r.Certificate,
+		IssuerCertificate: r.IssuerCertificate,
+		CSR:               r.CSR,
+	}
 }
