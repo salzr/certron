@@ -10,7 +10,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/go-acme/lego/v3/certificate"
 	"github.com/spf13/cobra"
 
 	"salzr.com/certron/pkg/certron"
@@ -22,15 +21,23 @@ const (
 )
 
 type Options struct {
-	Email         string
-	Domain        string
-	ProjectDir    string
-	Force         bool
-	AcceptedTerms bool
+	email         string
+	domain        string
+	projectDir    string
+	force         bool
+	acceptedTerms bool
+
+	resultWriter certron.ResultWriter
+
+	toS3     bool
+	S3bucket string
 }
 
 func RootCommand() (*cobra.Command, error) {
-	o := newOptions()
+	o, err := newOptions()
+	if err != nil {
+		return nil, err
+	}
 
 	cmd := &cobra.Command{
 		Use:   "certron domain",
@@ -45,63 +52,77 @@ Certificate magic provided by the go-acme project <https://github.com/go-acme/le
 		},
 	}
 
-	cmd.Flags().StringVarP(&o.Email, "email", "e", o.Email,
+	cmd.Flags().StringVarP(&o.email, "email", "e", o.email,
 		"email is required to initialize the client")
-
-	cmd.Flags().BoolVarP(&o.AcceptedTerms, "accept-terms", "a", o.AcceptedTerms,
+	cmd.Flags().BoolVarP(&o.acceptedTerms, "accept-terms", "a", o.acceptedTerms,
 		"you must accept the terms of service <https://letsencrypt.org/repository/> in order to generate the certificate")
+	cmd.Flags().BoolVarP(&o.toS3, "to-s3", "", o.toS3,
+		"uploads resulting certificate to Amazon's Simple Storage Solution")
+	cmd.Flags().StringVarP(&o.S3bucket, "s3-bucket", "", o.S3bucket,
+		"s3 bucket is the target bucket location where artifacts will be uploaded to")
 
-	if err := cmd.MarkFlagRequired("email"); err != nil {
-		return nil, err
-	}
+	cmd.MarkFlagRequired("email")
 
 	return cmd, nil
 }
 
 func (o *Options) Validate(args []string) error {
-	o.Domain = args[0]
+	o.domain = args[0]
 
 	re := regexp.MustCompile(domainR)
-	if match := re.MatchString(o.Domain); match != true {
-		return fmt.Errorf("domain arg value='%s' is not valid", o.Domain)
+	if match := re.MatchString(o.domain); match != true {
+		return fmt.Errorf("domain arg value='%s' is not valid", o.domain)
 	}
 
 	re = regexp.MustCompile(emailR)
-	if match := re.MatchString(o.Email); match != true {
-		return fmt.Errorf("email flag value='%s' is not valid", o.Email)
+	if match := re.MatchString(o.email); match != true {
+		return fmt.Errorf("email flag value='%s' is not valid", o.email)
 	}
 
-	if !o.AcceptedTerms {
+	if !o.acceptedTerms {
 		return errors.New("you must accept the terms of service in order to use certron")
 	}
 
-	if _, err := os.Stat(o.ProjectDir); err != nil {
+	if _, err := os.Stat(o.projectDir); err != nil {
 		if os.IsNotExist(err) {
-			if err := os.MkdirAll(o.ProjectDir, 0700); err != nil {
+			if err := os.MkdirAll(o.projectDir, 0700); err != nil {
 				return err
 			}
 		}
+	}
+
+	if o.toS3 {
+		if o.S3bucket == "" {
+			return errors.New("--s3-bucket is required")
+		}
+
+		s3Writer, err := certron.NewS3Writer(certron.OptionS3BucketBase(o.S3bucket))
+		if err != nil {
+			return err
+		}
+
+		o.resultWriter = s3Writer
 	}
 
 	return nil
 }
 
 func (o *Options) Run() error {
-	var r *certificate.Resource
+	var r *certron.Result
 
-	fn := path.Join(o.ProjectDir, domainFileNameFmt(o.Domain))
+	fn := path.Join(o.projectDir, domainFileNameFmt(o.domain))
 
-	if !o.Force {
+	if !o.force {
 		r = isCached(fn)
 	}
 
-	if r == nil {
-		c, err := certron.NewClient(o.Email)
-		if err != nil {
-			return err
-		}
+	c, err := certron.NewClient(o.email, o.resultWriter)
+	if err != nil {
+		return err
+	}
 
-		r, err = c.GenerateCert(o.Domain, o.AcceptedTerms)
+	if r == nil {
+		r, err = c.GenerateCert(o.domain, o.acceptedTerms)
 		if err != nil {
 			return err
 		}
@@ -111,12 +132,10 @@ func (o *Options) Run() error {
 		}
 	}
 
-	fmt.Printf("%s%s\n", r.Certificate, r.IssuerCertificate)
-
-	return nil
+	return c.Write(r)
 }
 
-func cache(filename string, r *certificate.Resource) error {
+func cache(filename string, r *certron.Result) error {
 	j, err := json.Marshal(certron.NewResourceCache(r))
 	if err != nil {
 		return err
@@ -125,7 +144,7 @@ func cache(filename string, r *certificate.Resource) error {
 	return ioutil.WriteFile(filename, j, 0600)
 }
 
-func isCached(filename string) *certificate.Resource {
+func isCached(filename string) *certron.Result {
 	_, err := os.Stat(filename)
 	if err != nil {
 		return nil
@@ -144,10 +163,16 @@ func isCached(filename string) *certificate.Resource {
 	return r.ToResource()
 }
 
-func newOptions() *Options {
-	return &Options{
-		ProjectDir: defaultProjectDir(),
+func newOptions() (*Options, error) {
+	writer, err := certron.NewDefaultWriter()
+	if err != nil {
+		return nil, err
 	}
+
+	return &Options{
+		projectDir:   defaultProjectDir(),
+		resultWriter: writer,
+	}, nil
 }
 
 func domainFileNameFmt(d string) string {
