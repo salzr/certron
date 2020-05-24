@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
@@ -82,8 +81,7 @@ func (w S3Writer) Write(r *Result) error {
 		}
 	}
 
-	domain := strings.TrimPrefix(r.certificate.Domain, "*.")
-	key := filepath.Join(domain, filepath.Base(file))
+	key := filepath.Join(r.certificate.Domain, filepath.Base(file))
 
 	_, err = w.uploader.Upload(&s3manager.UploadInput{
 		Bucket: bucket,
