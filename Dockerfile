@@ -8,6 +8,7 @@ RUN make build
 
 FROM alpine
 RUN adduser -S -D -H -h /app certron
+RUN chown certron /app
 USER certron
 COPY --from=builder /build/certron /app/
 WORKDIR /app
