@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 
 	"salzr.com/certron/pkg/certron"
 )
@@ -29,7 +30,7 @@ type Options struct {
 
 	resultWriter certron.ResultWriter
 
-	toS3     bool
+	S3       bool
 	S3bucket string
 }
 
@@ -45,29 +46,40 @@ func RootCommand() (*cobra.Command, error) {
 		Long: `A simple way of generating FREE ssl certificates.
 Resulting certs can be persisted in S3.
 Certificate magic provided by the go-acme project <https://github.com/go-acme/lego>`,
-		Args: cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			handleErr(o.Validate(args))
 			handleErr(o.Run())
 		},
 	}
 
-	cmd.Flags().StringVarP(&o.email, "email", "e", o.email,
+	cmd.Flags().String("email", o.email,
 		"email is required to initialize the client")
-	cmd.Flags().BoolVarP(&o.acceptedTerms, "accept-terms", "a", o.acceptedTerms,
+	cmd.Flags().Bool("accept-terms", o.acceptedTerms,
 		"you must accept the terms of service <https://letsencrypt.org/repository/> in order to generate the certificate")
-	cmd.Flags().BoolVarP(&o.toS3, "to-s3", "", o.toS3,
+	cmd.Flags().Bool("to-s3", o.S3,
 		"uploads resulting certificate to Amazon's Simple Storage Solution")
-	cmd.Flags().StringVarP(&o.S3bucket, "s3-bucket", "", o.S3bucket,
+	cmd.Flags().String("s3-bucket", o.S3bucket,
 		"s3 bucket is the target bucket location where artifacts will be uploaded to")
 
-	cmd.MarkFlagRequired("email")
+	viper.BindPFlag("email", cmd.Flags().Lookup("email"))
+	viper.BindPFlag("accept_terms", cmd.Flags().Lookup("accept-terms"))
+	viper.BindPFlag("to_s3", cmd.Flags().Lookup("to-s3"))
+	viper.BindPFlag("s3_bucket", cmd.Flags().Lookup("s3-bucket"))
 
 	return cmd, nil
 }
 
+// TODO: Argument or HOST are required
+// TODO: Set option
 func (o *Options) Validate(args []string) error {
-	o.domain = args[0]
+	setOptionsFromEnv(o)
+
+	if o.domain == "" && len(args) != 0 {
+		o.domain = args[0]
+	}
+	if o.domain == "" {
+		return fmt.Errorf("CERTRON_DOMAIN or certron <domain> argument must be set")
+	}
 
 	re := regexp.MustCompile(domainR)
 	if match := re.MatchString(o.domain); match != true {
@@ -91,7 +103,7 @@ func (o *Options) Validate(args []string) error {
 		}
 	}
 
-	if o.toS3 {
+	if o.S3 {
 		if o.S3bucket == "" {
 			return errors.New("--s3-bucket is required")
 		}
@@ -177,4 +189,13 @@ func newOptions() (*Options, error) {
 
 func domainFileNameFmt(d string) string {
 	return strings.ReplaceAll(d, ".", "_") + ".json"
+}
+
+func setOptionsFromEnv(o *Options) {
+	o.domain = viper.GetString("DOMAIN")
+	o.email = viper.GetString("EMAIL")
+	o.acceptedTerms = viper.GetBool("ACCEPT_TERMS")
+
+	o.S3 = viper.GetBool("S3")
+	o.S3bucket = viper.GetString("S3_BUCKET")
 }
